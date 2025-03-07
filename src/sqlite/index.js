@@ -8,56 +8,69 @@ const error = console.error;
 
 const workers = {};
 let publicAPI = {};
-let returnValues = {}; // return values go here
-
-function initalizeWorker(name) {
-    let worker = new Worker(new URL('./sqliteWorker.js', import.meta.url), { type: 'module' });
-    worker.onmessage = function ({ data }) {
-        const { type } = data;
-        switch (type) {
-            case "application/vnd.sqlite3": { // db download ready 
-                let downloadChannel = new BroadcastChannel("download_channel");
-                downloadChannel.postMessage(data);
-                downloadChannel.close();
-                break;
-            }
-            case "application/json":
-                const { timestamp, result } = data;
-                returnValues[timestamp] = structuredClone(result);
-                break;
-            default:
-                const { message } = data;
-                log("Response from worker: ", message);
-        }
-    }
-    if (workers[name]) {
-        error("InstantiationError: already taken");
-        worker.terminate();
-    } else {
-        workers[name] = worker;
-    }
-}
 
 const api = {
-    createDB: async function (name) {
-        initalizeWorker(name);
-        let worker = this.getWorker(name);
-        worker.postMessage({ action: 'createDB', name });
-    },
-    getWorker: function (name) {
+    getWorker: function (name = 'default') {
         let worker = workers[name];
         return worker ? worker : undefined;
     },
-    downloadDB: function (name) {
+    createDB: function (name = 'default') {
+        return new Promise((resolve, reject) => {
+            initalizeWorker(name);
+            let worker = this.getWorker(name);
+            worker.onmessage = function ({ data }) {
+                const { type, message } = data;
+                if (type === 'created') {
+                    resolve(message);
+                }
+            }
+            worker.onerror = (error) => {
+                reject(new Error(error));
+            };
+            worker.postMessage({ action: 'createDB', name });
+        });
+    },
+    executeQuery: function ({ sql, values }) {
+        return new Promise((resolve, reject) => {
+            let worker = this.getWorker();
+            worker.onmessage = function ({ data }) {
+                const { type } = data;
+                if (type === 'application/json') {
+                    const { result } = data;
+                    resolve(result);
+                }
+            }
+            worker.onerror = (error) => {
+                reject(error);
+            };
+            if (values && sql.indexOf("$") != -1) {
+                values.forEach(
+                    function replacePlaceholder(item, index) {
+                        sql = sql.replace("$" + (index + 1), `'${item}'`);
+                    }
+                );
+            }
+            worker.postMessage({ action: "executeQuery", sql });
+        })
+    },
+    downloadDB: function (name = 'default') {
         let worker = workers[name];
         if (worker) {
+            worker.onmessage = function ({ data }) {
+                const { type } = data;
+                if (type === 'application/vnd.sqlite3') {
+                    let downloadChannel = new BroadcastChannel("download_channel");
+                    downloadChannel.postMessage(data);
+                    downloadChannel.close();
+                }
+            }
             worker.postMessage({ action: 'downloadDB' });
         }
     },
     uploadDB: function (fileName, arrayBuffer) {
         let [name, extension] = fileName.split(".");
         if (extension === 'sqlite3') {
-            worker = workers[name];
+            let worker = workers[name];
             if (!worker) {
                 initalizeWorker(name);
                 worker.postMessage({ action: 'uploadDB', name, arrayBuffer });
@@ -80,34 +93,14 @@ if (window.Worker) {
     console.error('Your browser doesn\'t support web workers.');
 }
 
-export async function executeQuery({ text, values }) {
-    let queryString = text;
-    if (values && queryString.indexOf("$") != -1) values.forEach(function replacePlaceholder(item, index) { queryString = queryString.replace("$" + (index + 1), `'${item}'`); });
-    const worker = await getWorker();
-    let timestamp = Date.now();
-    worker.postMessage({ timestamp, type: "exec", sql: queryString, returnValue: "resultRows" });
-    try {
-        return new Promise((resolve) => {
-            const checkAgain = function () {
-                if (returnValues[timestamp]) {
-                    const returnValue = structuredClone(returnValues[timestamp]);
-                    resolve(returnValue);
-                } else
-                    setTimeout(checkAgain, 0);
-            }
-            checkAgain();
-        });
-    } finally {
-        delete returnValues[timestamp];
+function initalizeWorker(name) {
+    let worker = new Worker(new URL('./sqliteWorker.js', import.meta.url), { type: 'module' });
+    if (workers[name]) {
+        error("InstantiationError: already taken");
+        worker.terminate();
+    } else {
+        workers[name] = worker;
     }
-}
-
-export async function executeQuerySync({ text, values }) {
-    let queryString = text;
-    if (values && queryString.indexOf("$") === -1) values.forEach(function replacePlaceholder(item, index) { queryString = queryString.replace("$" + (index + 1), `'${item}'`); });
-    const message = { type: "exec", sql: queryString, returnValue: "resultRows" };
-    const worker = await getWorker();
-    worker.postMessage(JSON.stringify(message));
 }
 
 export default publicAPI;

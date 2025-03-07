@@ -10,10 +10,12 @@
     "preview": "vite preview"
   },
   "devDependencies": {
-    "vite": "^6.2.0",
-    "@vitejs/plugin-basic-ssl": "^2.0.0"
+    "@vitejs/plugin-basic-ssl": "^2.0.0",
+    "vite": "^6.2.0"
   },
   "dependencies": {
+    "@rollup/plugin-alias": "^5.1.1",
+    "@rollup/plugin-node-resolve": "^16.0.0",
     "@sqlite.org/sqlite-wasm": "^3.49.1-build2"
   }
 }

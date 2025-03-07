@@ -1,4 +1,4 @@
-import { htmlFiles } from '@public';
+import { htmlFiles } from '/public';
 
 for (const filePath of htmlFiles) {
     const fileName = filePath.split("/").pop();
